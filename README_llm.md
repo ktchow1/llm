@@ -1,341 +1,249 @@
-Below is a clean, end-to-end **specification document** of your idea, rewritten from scratch so it can be shared with humans or used directly by another LLM/agent to implement the experiment.
+Below is a **clean, structured Markdown summary** of everything we discussed, written to be **precise, numeric, and implementation-oriented**, matching your intent to *really understand transformers / GPT from first principles*.
+
+You can save this directly as `attention_summary.md`.
 
 ---
 
-# Toy LLM Calculator Experiment — Specification
+# Transformer Attention — Precise Summary
 
-## 1. Purpose / Intuition
+## 1. Tokens and Embeddings
 
-The goal of this project is to build a **minimal transformer-based next-token predictor** to understand:
+* Each token `t` is mapped to a **token embedding vector**
+  [
+  e_t \in \mathbb{R}^{d_{\text{model}}}
+  ]
 
-> Why predicting the next token in a sequence is sufficient to learn structured logic (e.g., arithmetic), even without explicit rules.
+* In GPT-style models:
 
-We want to experimentally demonstrate:
+  * `d_model` is fixed (e.g. GPT-3: `d_model = 12288`)
+  * **Token embeddings are fixed after training**
+  * Context dependence comes **later**, via attention, not from embeddings
 
-* A model trained only on next-token prediction
-* Can learn implicit rules of arithmetic
-* Without being explicitly programmed with math logic
-
-This is a **controlled toy analogue of how LLMs like ChatGPT learn reasoning-like behavior from text alone**.
-
----
-
-# 2. Core Hypothesis
-
-A transformer trained with:
-
-> next-token prediction on structured sequences
-
-can learn:
-
-* arithmetic rules
-* grammar structure
-* algorithm-like behavior
-
-purely from statistical patterns in data.
+* The *same token* always starts with the *same embedding*, regardless of context.
 
 ---
 
-# 3. Task Definition
+## 2. Layers vs Heads (NOT the same thing)
 
-We define a **sequence-to-sequence completion task**, but trained as next-token prediction.
+* **Layer**: a sequential depth step
+* **Head**: a parallel attention subspace *within* a layer
 
-Each training sample is a full arithmetic expression:
+Example (GPT-3 175B):
 
-```text
-A op B = R <EOS>
-```
-
-The model learns to predict each next token in the sequence.
-
----
-
-# 4. Number System Constraints
-
-## Operand range:
-
-```
-A, B ∈ [-10000, 10000]
-```
-
-## Representation rules:
-
-* Base-10 integers only
-* Negative numbers allowed (`-` is part of number)
-* No floating point
-* No scientific notation
+* Layers: `96`
+* Heads per layer: `96`
+* This is **not a rule**, just a design choice.
 
 ---
 
-# 5. Operators
+## 3. Dimensions (Concrete Numbers)
 
-```
-op ∈ { +, -, *, / }
-```
+Let:
 
-## Division rule:
-
-```
-A / B = floor(A / B)
-```
-
-(no remainder, no decimals)
+* `d_model = 12288`
+* `n_heads = 96`
+* Then:
+  [
+  d_{\text{head}} = \frac{d_{\text{model}}}{n_{\text{heads}}} = 128
+  ]
 
 ---
 
-# 6. Tokenization
+## 4. Q, K, V Matrices (Per Layer, Per Head)
 
-We use **character-level tokenization**:
+For **each layer** and **each head**, we have **separate learned matrices**:
 
-### Vocabulary:
+[
+W_Q^h \in \mathbb{R}^{d_{\text{model}} \times d_{\text{head}}}
+]
+[
+W_K^h \in \mathbb{R}^{d_{\text{model}} \times d_{\text{head}}}
+]
+[
+W_V^h \in \mathbb{R}^{d_{\text{model}} \times d_{\text{head}}}
+]
 
-```
-0 1 2 3 4 5 6 7 8 9
-+ - * / =
-<EOS>
-```
+Important:
 
-### Important rule:
-
-* Each digit is one token
-* Negative sign `-` is part of number token stream, not a separate operation
-
-Example:
-
-```
--123+45=...
-```
-
-becomes:
-
-```
-- 1 2 3 + 4 5 = ...
-```
+* **Same matrix is used for all tokens**
+* **Different head ⇒ different matrices**
+* **Different layer ⇒ different matrices**
 
 ---
 
-# 7. Dataset Construction
+## 5. Query, Key, Value Vectors (Per Token)
 
-## 7.1 Generation rule
+For token `i` with embedding `e_i`:
 
-Each sample is generated deterministically:
+[
+q_i^h = e_i W_Q^h \in \mathbb{R}^{d_{\text{head}}}
+]
+[
+k_i^h = e_i W_K^h \in \mathbb{R}^{d_{\text{head}}}
+]
+[
+v_i^h = e_i W_V^h \in \mathbb{R}^{d_{\text{head}}}
+]
 
-```
-A op B = R <EOS>
-```
+So:
 
-where:
-
-* A, B are randomly sampled integers in range
-* R is computed using exact arithmetic rules defined above
-
----
-
-## 7.2 Example samples
-
-```
-1+2=3<EOS>
-12+34=46<EOS>
--5+7=2<EOS>
-10/4=2<EOS>
-```
+* Query dimension = Key dimension = `d_head`
+* Value dimension = `d_head`
+* A token has **96 different queries per layer** (one per head)
 
 ---
 
-## 7.3 Critical constraint (IMPORTANT)
+## 6. Are Q/K/V Values Bounded?
 
-Each prefix must have **exactly one correct continuation**.
+* Elements of Q, K, V:
 
-We do NOT include ambiguous mappings such as:
+  * Type: float (FP16 / BF16 / FP32)
+  * **No fixed range**
+  * Typically centered around `~N(0, σ²)` after training
 
-❌ WRONG:
+* Dot product:
+  [
+  q_i \cdot k_j
+  ]
 
-```
-1+2 → =
-1+2 → 3
-```
-
-✔ CORRECT:
-Only full deterministic sequences exist.
-
----
-
-## 7.4 Optional curriculum (recommended)
-
-Start simple, then increase difficulty:
-
-### Stage 1:
-
-```
-A op B (small numbers)
-```
-
-### Stage 2:
-
-```
-include negatives
-```
-
-### Stage 3:
-
-```
-expand range to [-10000, 10000]
-```
+  * **Unbounded**
+  * Can be large or small
 
 ---
 
-# 8. Training Objective
+## 7. Why Scaling by √d?
 
-Standard autoregressive language modeling:
+Scaled dot product attention:
 
-```
-maximize P(token_t | token_1 ... token_{t-1})
-```
+[
+\text{score}*{ij} = \frac{q_i \cdot k_j}{\sqrt{d*{\text{head}}}}
+]
 
-Loss:
+Reason:
 
-```
-cross entropy loss over next token prediction
-```
-
----
-
-# 9. Model Architecture (toy-scale)
-
-Designed for CPU training.
-
-| Component      | Value      |
-| -------------- | ---------- |
-| Layers         | 2          |
-| Heads          | 2–4        |
-| d_model        | 64         |
-| FFN size       | 128        |
-| Context length | 28–32      |
-| Parameters     | ~100k–300k |
+* Prevents dot products from growing too large
+* Keeps softmax gradients stable
 
 ---
 
-# 10. Context Length
+## 8. What Does “Similarity” Mean?
 
-Must support full sequence:
+There is **NO absolute threshold** like:
 
-```
-A op B = R <EOS>
-```
+> “If QK > X then similar”
 
-Recommended:
+Instead:
 
-```
-context_size = 28 (safe baseline)
-context_size = 32 (robust choice)
-```
+* Similarity is **relative**
+* Only meaningful **after softmax**
 
 ---
 
-# 11. Training Behavior
+## 9. Softmax (Key Property)
 
-The model is NOT trained to directly compute arithmetic.
+[
+\text{softmax}(s_i) = \frac{e^{s_i}}{\sum_j e^{s_j}}
+]
 
-Instead it learns:
+Effects:
 
-* structural patterns in sequences
-* token transitions in valid equations
-* implicit algorithm-like behavior from data regularities
+* **Amplifies winners**
+* **Suppresses losers**
+* Turns raw scores into a probability distribution
 
----
+Your statement was exactly right:
 
-# 12. Expected Learned Behavior
-
-After training:
-
-## Prefix behavior examples
-
-```
-1+2 → =
-1+2= → 3
-1+ → digit (building operand)
-12 → operator likely (+ - * /)
-```
-
-The model learns a **syntactic + arithmetic state machine implicitly**.
+> softmax amplifies differences among winners but shrinks differences among losers
 
 ---
 
-# 13. Key Conceptual Insight
+## 10. Directionality of Similarity
 
-This experiment demonstrates:
+Important asymmetry:
 
-> A next-token predictor does not memorize equations — it learns a compressed model of the data distribution that can behave like an algorithm.
+[
+q_n \cdot k_m ;\text{large} ;;\nRightarrow;; q_m \cdot k_n ;\text{large}
+]
 
-Arithmetic “emerges” because:
+Reason:
 
-* dataset is consistent
-* structure is repetitive
-* constraints enforce determinism
-* model learns transitions, not rules explicitly
-
----
-
-# 14. What this experiment teaches
-
-This toy system demonstrates:
-
-### 1. Language modeling = structure learning
-
-Not just text generation.
-
-### 2. Logic emerges from distribution
-
-Not from explicit rules.
-
-### 3. Deterministic systems become learnable patterns
-
-When encoded as sequences.
+* `q` and `k` come from **different projections**
+* Attention is **directed**
 
 ---
 
-# 15. Extension Path (future work)
+## 11. Which Tokens Are Compared?
 
-This system can be extended gradually:
+For **token i attending**:
 
-### Phase 1:
+* Query: `q_i`
+* Keys: `{k_1, k_2, ..., k_i}` (causal mask in GPT)
+* Yes:
 
-Single operator arithmetic (current spec)
-
-### Phase 2:
-
-Multi-operator expressions:
-
-```
-1+2+3=
-```
-
-### Phase 3:
-
-Operator precedence:
-
-```
-1+2*3=
-```
-
-### Phase 4:
-
-Decimals and fixed-point arithmetic
+  * Later token compares its query with **earlier keys**
+  * Earlier tokens **cannot see later tokens**
 
 ---
 
-# 16. Summary
+## 12. Value Vectors
 
-This project builds a minimal environment where:
+* Value vector of token `j`:
 
-> A transformer trained only on next-token prediction learns to behave like a calculator.
+  * **Fixed for that token in that layer & head**
+  * Independent of *who* is attending to it
 
-It serves as a controlled demonstration of:
+Attention output:
 
-* why LLMs can learn reasoning-like behavior
-* how structure emerges from data
-* how probability modeling becomes algorithmic behavior
+[
+\text{output}*i^h = \sum_j \text{softmax}*{ij} \cdot v_j
+]
 
 ---
 
-If you want, I can next turn this into a **fully runnable PyTorch project (dataset + model + training + inference script)** in a single clean file.
+## 13. Why Multiple Heads Don’t Collapse
+
+Your concern:
+
+> Heads don’t communicate — why don’t they learn identical things?
+
+Reasons they *don’t* collapse:
+
+1. **Different parameter initialization**
+2. **Different gradient signals**
+3. **Different subspaces (`W_Q^h, W_K^h, W_V^h`)**
+4. **Output projection mixes heads**, so redundancy is penalized
+5. Empirically, heads specialize (syntax, position, induction, etc.)
+
+No explicit constraint enforces diversity — it **emerges from optimization pressure**.
+
+---
+
+## 14. Mental Model (Correct)
+
+* A token:
+
+  * Has **one embedding**
+  * Produces **96 different queries per layer**
+* Each head:
+
+  * Looks at the sequence through a different linear lens
+* Layers:
+
+  * Repeatedly remix information, building abstraction depth
+
+---
+
+## 15. One-Sentence Summary
+
+> A transformer layer projects each token embedding into multiple query–key–value subspaces; each head performs directed, relative similarity matching via scaled dot-product + softmax, and layers stack these operations to build context-dependent representations.
+
+---
+
+If you want next:
+
+* **Toy numerical example (with real numbers)**
+* **Why induction heads emerge**
+* **Full forward pass pseudocode**
+* **How this becomes a next-token predictor**
+
+Just say which.
