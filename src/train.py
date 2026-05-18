@@ -19,7 +19,14 @@ ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
-from src.data import CalculatorTokenizer, build_training_data, generate_corpus, split_corpus
+from src.data import (
+    DEFAULT_TRAIN_OPERATORS,
+    DIGITS,
+    CalculatorTokenizer,
+    build_training_data,
+    generate_corpus,
+    split_corpus,
+)
 from src.model import CalculatorModel
 
 
@@ -30,6 +37,7 @@ def train_epoch(
     lr: float,
     batch_size: int,
     grad_clip: float,
+    weight_decay: float,
     epoch: int,
     epochs: int,
     log_every_batches: int,
@@ -42,8 +50,8 @@ def train_epoch(
 
     for batch_num, start in enumerate(range(0, n, batch_size), start=1):
         batch = order[start : start + batch_size]
-        loss, *grads = model.loss_and_gradients(contexts[batch], targets[batch])
-        model.update(tuple(grads), lr=lr, grad_clip=grad_clip)
+        loss, grads = model.loss_and_gradients(contexts[batch], targets[batch])
+        model.update(grads, lr=lr, grad_clip=grad_clip, weight_decay=weight_decay)
         total_loss += loss * len(batch)
 
         should_log = (
@@ -85,6 +93,8 @@ def generate_rhs(
 ) -> str:
     context = list(tokenizer.encode_text(prompt, add_eos=False))
     generated: list[int] = []
+    digit_ids = [tokenizer.token_to_idx[digit] for digit in DIGITS]
+    minus_id = tokenizer.token_to_idx["-"]
 
     for _ in range(max_new_tokens):
         if len(context) < model.context_size:
@@ -93,6 +103,13 @@ def generate_rhs(
             padded = context[-model.context_size :]
 
         dist = model.predict_distribution(np.array(padded, dtype=np.int32))
+        allowed_ids = digit_ids + [tokenizer.eos_id]
+        if not generated:
+            allowed_ids.append(minus_id)
+        masked = np.zeros_like(dist)
+        masked[allowed_ids] = dist[allowed_ids]
+        if masked.sum() > 0:
+            dist = masked / masked.sum()
         next_id = int(np.argmax(dist))
         if next_id == tokenizer.eos_id:
             break
@@ -128,19 +145,22 @@ def save_training_params(path: Path, args: argparse.Namespace, metrics: dict) ->
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train the toy LLM calculator model")
-    parser.add_argument("--num-expr", type=int, default=2000)
-    parser.add_argument("--epochs", type=int, default=25)
-    parser.add_argument("--lr", type=float, default=0.03)
-    parser.add_argument("--batch-size", type=int, default=128)
+    parser.add_argument("--num-expr", type=int, default=30603)
+    parser.add_argument("--epochs", type=int, default=100)
+    parser.add_argument("--lr", type=float, default=0.003)
+    parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--context-size", type=int, default=32)
-    parser.add_argument("--emb-dim", type=int, default=64)
-    parser.add_argument("--ff-dim", type=int, default=128)
-    parser.add_argument("--num-layers", type=int, default=2)
-    parser.add_argument("--min-value", type=int, default=-10000)
-    parser.add_argument("--max-value", type=int, default=10000)
+    parser.add_argument("--emb-dim", type=int, default=128)
+    parser.add_argument("--ff-dim", type=int, default=512)
+    parser.add_argument("--num-layers", type=int, default=4)
+    parser.add_argument("--num-heads", type=int, default=4)
+    parser.add_argument("--min-value", type=int, default=0)
+    parser.add_argument("--max-value", type=int, default=100)
+    parser.add_argument("--operators", type=str, default=DEFAULT_TRAIN_OPERATORS)
     parser.add_argument("--validation-fraction", type=float, default=0.1)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--grad-clip", type=float, default=1.0)
+    parser.add_argument("--weight-decay", type=float, default=0.01)
     parser.add_argument("--output-dir", type=str, default="weight")
     parser.add_argument("--name", type=str, default="calculator_transformer")
     parser.add_argument("--eval-expr", type=int, default=100)
@@ -168,7 +188,14 @@ def main() -> None:
     print(f"  epochs={args.epochs}", flush=True)
     print(f"  batch_size={args.batch_size}", flush=True)
     print(f"  context_size={args.context_size}", flush=True)
-    print(f"  model emb_dim={args.emb_dim} ff_dim={args.ff_dim} layers={args.num_layers}", flush=True)
+    print(f"  number_range={args.min_value}..{args.max_value}", flush=True)
+    print(f"  operators={args.operators}", flush=True)
+    print(
+        f"  model emb_dim={args.emb_dim} ff_dim={args.ff_dim} "
+        f"layers={args.num_layers} heads={args.num_heads}",
+        flush=True,
+    )
+    print(f"  optimizer=AdamW weight_decay={args.weight_decay}", flush=True)
     print(f"  output_dir={output_dir}", flush=True)
     print("  cpu math threads:", flush=True)
     print(f"    OPENBLAS_NUM_THREADS={os.environ.get('OPENBLAS_NUM_THREADS')}", flush=True)
@@ -181,6 +208,7 @@ def main() -> None:
         num_expr=args.num_expr,
         min_value=args.min_value,
         max_value=args.max_value,
+        operators=args.operators,
         seed=args.seed,
     )
     print(f"Generated {len(corpus)} equations.", flush=True)
@@ -208,6 +236,7 @@ def main() -> None:
         emb_dim=args.emb_dim,
         ff_dim=args.ff_dim,
         num_layers=args.num_layers,
+        num_heads=args.num_heads,
         seed=args.seed,
     )
 
@@ -223,6 +252,7 @@ def main() -> None:
             lr=args.lr,
             batch_size=args.batch_size,
             grad_clip=args.grad_clip,
+            weight_decay=args.weight_decay,
             epoch=epoch,
             epochs=args.epochs,
             log_every_batches=args.log_every_batches,
@@ -230,15 +260,21 @@ def main() -> None:
         epoch_seconds = time.time() - epoch_start
         if epoch == 1 or epoch == args.epochs or epoch % 5 == 0:
             print("  running validation token accuracy...", flush=True)
-            val_acc = token_accuracy(model, val_contexts, val_targets)
+            if len(val_targets) > 0:
+                val_acc = token_accuracy(model, val_contexts, val_targets)
+                val_text = f"val_token_acc={val_acc * 100:.2f}% "
+            else:
+                val_acc = None
+                val_text = "val_token_acc=skipped "
             print(
                 f"Epoch {epoch:3d}/{args.epochs} "
-                f"loss={loss:.4f} val_token_acc={val_acc * 100:.2f}% "
+                f"loss={loss:.4f} {val_text}"
                 f"time={epoch_seconds:.1f}s",
                 flush=True,
             )
             metrics["last_loss"] = float(loss)
-            metrics["last_val_token_accuracy"] = float(val_acc)
+            if val_acc is not None:
+                metrics["last_val_token_accuracy"] = float(val_acc)
         else:
             print(
                 f"Epoch {epoch:3d}/{args.epochs} loss={loss:.4f} time={epoch_seconds:.1f}s",
@@ -250,6 +286,7 @@ def main() -> None:
         num_expr=args.eval_expr,
         min_value=args.min_value,
         max_value=args.max_value,
+        operators=args.operators,
         seed=args.seed + 1,
     )
     metrics["eval_exact_match_accuracy"] = float(

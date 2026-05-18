@@ -8,6 +8,7 @@ import numpy as np
 
 DIGITS = "0123456789"
 OPERATORS = "+-*/"
+DEFAULT_TRAIN_OPERATORS = "+-*"
 EQUATION = "="
 
 PAD = "<PAD>"
@@ -43,18 +44,33 @@ def format_sample(a: int, op: str, b: int) -> str:
 
 def generate_corpus(
     num_expr: int = 5000,
-    min_value: int = -10000,
-    max_value: int = 10000,
-    operators: Sequence[str] = tuple(OPERATORS),
+    min_value: int = 0,
+    max_value: int = 20,
+    operators: Sequence[str] = tuple(DEFAULT_TRAIN_OPERATORS),
     seed: int | None = None,
 ) -> List[str]:
     rng = random.Random(seed)
-    corpus: List[str] = []
+    valid_operators = tuple(operators)
+    for op in valid_operators:
+        if op not in OPERATORS:
+            raise ValueError(f"unsupported operator: {op}")
+
+    corpus = [
+        format_sample(a, op, b)
+        for op in valid_operators
+        for a in range(min_value, max_value + 1)
+        for b in range(min_value, max_value + 1)
+        if not (op == "/" and b == 0)
+    ]
+    rng.shuffle(corpus)
+
+    if len(corpus) >= num_expr:
+        return corpus[:num_expr]
 
     while len(corpus) < num_expr:
         a = rng.randint(min_value, max_value)
         b = rng.randint(min_value, max_value)
-        op = rng.choice(tuple(operators))
+        op = rng.choice(valid_operators)
         if op == "/" and b == 0:
             continue
         corpus.append(format_sample(a, op, b))
@@ -138,6 +154,11 @@ def build_training_data(
             contexts.append(context.astype(np.int32))
             targets.append(int(target))
 
+    if not contexts:
+        return (
+            np.empty((0, context_size), dtype=np.int32),
+            np.empty((0,), dtype=np.int32),
+        )
     return np.array(contexts, dtype=np.int32), np.array(targets, dtype=np.int32)
 
 
@@ -146,6 +167,8 @@ def split_corpus(
     validation_fraction: float = 0.1,
     seed: int = 42,
 ) -> Tuple[List[str], List[str]]:
+    if validation_fraction <= 0:
+        return list(corpus), []
     shuffled = list(corpus)
     rng = random.Random(seed)
     rng.shuffle(shuffled)

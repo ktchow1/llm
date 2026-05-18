@@ -339,3 +339,24 @@ It serves as a controlled demonstration of:
 ---
 
 If you want, I can next turn this into a **fully runnable PyTorch project (dataset + model + training + inference script)** in a single clean file.
+
+
+
+python3 -m src.train \
+  --min-value 0 \
+  --max-value 100 \
+  --operators "+-*" \
+  --num-expr 30603 \
+  --validation-fraction 0.1 \
+  --epochs 100 \
+  --batch-size 256 \
+  --context-size 32 \
+  --emb-dim 128 \
+  --ff-dim 512 \
+  --num-layers 4 \
+  --num-heads 4 \
+  --lr 0.003 \
+  --weight-decay 0.01 \
+  --grad-clip 1.0 \
+  --name calculator_0_100_enhanced
+
