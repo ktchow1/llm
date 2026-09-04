@@ -348,7 +348,7 @@ python3 -m src.train \
   --operators "+-*" \
   --num-expr 30603 \
   --validation-fraction 0.1 \
-  --epochs 100 \
+  --epochs 30 \
   --batch-size 256 \
   --context-size 32 \
   --emb-dim 128 \
