@@ -1,0 +1,233 @@
+How does vscode ssh work:
+* vscode in local machine downloads vscode-server
+* vscode in local machine ssh remote machine, using local machine .ssh/config folder
+* vscode in local machine scp vscode-server to remote machine, run it in remote machine
+* vscode in local machine connect to vscode-server
+
+vscode extension:
+* may run in local windows machine (tw488f9x3.uk.db.com aka tw488)
+* may run in remote linux machine (ld4hfaappd102-st-uc.uk.db.com aka ld102) <--- this is the case for copilot extension depending where the extension is installed
+
+
+
+
+
+*******************
+*** Proxy chain ***
+*******************
+* all connections to outside internet must go through DB-root-gateway : sp-surf-proxy.intranet.db.com:8080
+* to enable internet access of cmd terminal in local box (tw488), we need to run px-proxy in local box, which local-forward port 3128 traffic to DB-root-gateway
+* to enable internet access of cmd terminal in dev box (ld102), we need to run ssh -N -R in local box, which remote-forward port 4128 traffic to local box 3128
+* besides, we need to download certificate, a file "db-root-gateway-ca-6.cer"
+  in tw488: C:/Users/[username]
+  in ld102: ~
+
+                 ssh tunnel                   ordinary TCP
+          +--------------------------+ +-----------------------+ 
+     port |                     port | | port             port |
+     4128 v                     3128 v v 3128             8080 v
+  +----------------+      +-----------------------+   +-----------------+
+  |   ssh_server   |      | ssh_client   px_proxy |   |  sp_surf_proxy  |
+  |                |      |                       |   |                 | ----> internet
+  |    DEV BOX     |      |       LOCAL BOX       |   |   DB GATEWAY    |
+  +----------------+      +-----------------------+   +-----------------+
+   with certificate            with certificate
+
+* upper case = machine
+* lower case = process
+* which process is listening to local box : 3128? px-proxy
+* which process is listening to dev box : 4128? ssh-server
+
+
+
+
+
+*************************
+*** Proxy chain setup ***
+*************************
+Step 1 : certificate "db-root-gateway-ca-6.cer"
+* download certificate to local box : C:\Users\chowdic via browser URL
+* download certificate to dev box : ld102:/export/fs2/devuser/chowdic via scp
+
+in local box
+> scp .\db-root-gateway-ca-6.cer chowdic@ld102:~
+
+in dev box
+> cd ~
+> chmod 644 db-root-gateway-ca-6.cer
+
+
+Step 2 : setup px-proxy (https://confluence.intranet.db.com/spaces/FICAI/pages/1947898446/px-proxy+setup)
+as px-proxy is pip package, we need :
+* install dbConda in software-request-portal + company-portal
+* install px-proxy in dbConda-terminal using pip
+* execute px-proxy in dbConda-terminal using python, to forward traffic from port 3128 (customizable) to DB-root-gateway port 8080 (fixed)
+
+
+Step 3 : route HTTP request in local box to px-proxy (via port 3128)
+* add these env var (CAPITAL LETTERS) to local box (tw488)
+* method 1, search "environment" in windows, add env var using GUI
+* method 2, open cmd
+
+> setx HTTP_PROXY       "http://localhost:3128"
+> setx HTTPS_PROXY      "http://localhost:3128"
+> setx NO_PROXY         "localhost,127.0.0.1,.db.com"
+> setx NODE_EXTRA_CA_CERTS "%USERPROFILE%\db-root-gateway-ca-6.cer"
+
+
+Step 4 : setup ssh-tunnel to dev box
+* open cmd, run "ssh -R", ssh-tunnel is alive as long as "ssh -R" is running
+> ssh -N -R 4128:127.0.0.1:3128 ld102   <--- keep this running
+> ssh ld102                             <--- ordinary ssh session
+  vscode ssh ld102                      <--- we can have vscode ssh ld102 at the same time
+
+Can we start ssh-tunnel with .ssh/config and run "ssh ld102" ?
+--------------------------------------------------------------
+  Host ld102
+    HostName               ld4hfaappd102-st-uc.uk.db.com
+    User                   chowdic
+    IdentityFile           C:\Users\chowdic\.ssh\id_rsa
+    RemoteForward          4128 127.0.0.1:3128
+    ExitOnForwardFailure   yes
+--------------------------------------------------------------
+Yes if we want single ssh connection to ld102. No if we want to :
+* ssh ld102 from tw488 with cmd ... and
+* ssh ld102 from tw488 with vscode
+* as both of them use the same .ssh/config,
+  when "ssh -R" is invoked for the 1st time, ssh-server will listen to port 4128
+  when "ssh -R" is invoked for the 2nd time, ssh-server will listen to port 4128 again, which will fail the ssh-connection
+
+
+Step 5 : route HTTP request in dev box to ssh tunnel (via port 4128), add the following to ld102:~/.bashrc
+export http_proxy=http://localhost:4128
+export https_proxy=http://localhost:4128
+export no_proxy=localhost,127.0.0.1,.db.com
+export NODE_EXTRA_CA_CERTS=/export/fs2/devuser/chowdic/db-root-gateway-ca-6.cer
+
+* unlike windows env var, http_proxy is in lower case
+* absolute path to home directory is needed as ~ cannot be recognised sometimes
+* absolute path to home directory is different in ld102 vs ny2
+
+
+Step 6 : route copilot extension request in dev box to ssh tunnel (via port 4128)
+* vscode runs in local box
+* vscode extension runs in dev box
+* vscode setting in local box should be updated to force vscode extension in dev box to use ssh-tunnel
+--------------------------------------------------------
+go to File > Preferences > Settings
+ensure "Remote [SSH: ld102]" scope is selected
+set these:
+Http: Proxy: http://localhost:4128
+Http: Proxy Strict SSL: false
+Http: Proxy Support: override
+--------------------------------------------------------
+we can troubleshoot in vscode by : vscode > view > output > copilot
+
+
+
+
+
+********************************************
+*** How to test px-proxy and ssh-tunnel? ***
+********************************************
+Test px-proxy, in local box (tw488)
+> curl -v https://www.google.com                                                                                                  <--- worked
+> curl -v --proxy http://localhost:3128 https://www.google.com                                                                    <--- worked
+> curl -v --proxy http://localhost:3128 --cacert C:\Users\chowdic\db-root-gateway-ca-6.cer https://www.google.com                 <--- worked
+> curl -v --cacert C:\Users\chowdic\db-root-gateway-ca-6.cer https://www.google.com                                               <--- worked
+
+Test ssh-tunnel in dev box (ld102)
+> wget -d https://www.google.com                                                                                                  <--- failed
+> wget -d --ca-certificate=/export/fs2/devuser/chowdic/db-root-gateway-ca-6.cer https://www.google.com                            <--- worked
+> curl -v https://www.google.com                                                                                                  <--- failed
+> curl -v --proxy http://localhost:4128 https://www.google.com                                                                    <--- failed
+> curl -v --proxy http://localhost:4128 --cacert /export/fs2/devuser/chowdic/db-root-gateway-ca-6.cer https://www.google.com      <--- worked
+> curl -v --cacert /export/fs2/devuser/chowdic/db-root-gateway-ca-6.cer https://www.google.com                                    <--- worked
+  i.e. failed to load certificate automatically ld102, need explicit tell wget / curl, env var NODE_EXTRA_CA_CERTS is not node.js only !!!
+
+
+
+
+
+*********************
+*** Copilot setup ***
+*********************
+Step 1 : setup dev-safe-space, for running copilot-cli
+https://dbunity.service-now.com/nav_to.do?uri=%2Fkb_view.do%3Fsys_kb_id%3D3920808e51b0df09003894606b4bcbea
+https://dbunity.service-now.com/nav_to.do?uri=%2Fcom.glideapp.servicecatalog_cat_item_view.do%3Fv%3D1%26sysparm_id%3Dd215b30f4776b2900272f7be436d43ba
+
+
+Step 2 : setup copilot-cli
+* start px-proxy, it is used for
+  install of copilot-cli by npm (please update npm config in local box before installation)
+  running of copilot-cli
+* install node.js in software-request-portal + company-portal
+* install copilot-cli in npm (node.js's package manager)
+
+How to tell npm to install copilot-cli in dev-safe-space?
+
+[method 1]
+add config : C:\Users\chowdic\.npmrc
+add a line : prefix=C:\Users\chowdic\dev\node_modules
+npm install : npm install -g @github/copilot
+C:\Users\chowdic\dev\node_modules <--- then copilot-cli should be installed here
+
+[method 2]
+In cmd terminal ;
+> npm config set prefix "C:\Users\chowdic\dev\node_modules"
+> npm config list
+> npm config get prefix
+
+If you see error like this on installation of copilot-cli ;
+npm error Invalid protocol "localhost:" connecting to proxy ""
+
+This is because of missing "http:", do this ;
+> npm config set proxy http://localhost:3128
+> npm config set https-proxy http://localhost:3128
+> npm install -g @github/copilot
+
+After installation, we can check in cmd terminal ;
+> where copilot
+  C:\Users\chowdic\dev\node_modules\copilot
+
+
+
+
+
+***************
+*** Diagram ***
+***************
+
+             install
+db-conda/pip ---------> px-proxy
+
+            install
+node.js/npm ---------> copilot-cli
+            via proxy
+
+
+
+Old copilot setup
+* use copilot extension, with ffwk in local box
+
+
+ffwk repo <------> vscode copilot <------> sp-surf-proxy <------> copilot server
+(tw488)            vscode IDE             (DB-root-gateway)       (Github)
+                   (tw488)
+
+
+
+New copilot setup
+* use copilot extension, with ffwk in dev box, OR ...
+* use copilot-cli with ffwk in local box
+
+
+ffwk repo <-----------> copilot-cli <----------+
+(tw488)                 (tw488)                |
+                                               |
+                                               |
+vscode copilot                                 v
+vscode server <------> vscode client <------> px-proxy <------> sp-surf-proxy <------> copilot server
+ffwk repo              vscode IDE             (tw488)         (DB-root-gateway)       (Github)
+(ld102)                (tw488)
+

@@ -1,0 +1,85 @@
+**********************************************
+*** ssh port local-forwarding (in general) ***
+**********************************************
+What is local-forwarding in ssh?
+* method 1     cmd > ssh -N -L [ssh_client_port] : [service_addr] : [service_port] [ssh_user]@[ssh_server_addr]
+* method 2     cmd > ssh <ssh_server_alias>                          plus following .ssh/config in ssh_client
+
+  Host <ssh_server_alias>
+    HostName      <ssh_server_addr>
+    User          <ssh_user>
+    LocalForward  <ssh_client_port> <service_addr>:<service_port>
+
+ssh-tunnel setup steps :
+* ssh_server listens to its own port 22
+* ssh_client connects to ssh_server port 22
+* ssh-tunnel's port on ssh_server side is assigned by ssh_server's OS
+* ssh-tunnel's port on ssh_client side is assigned by ssh_client's OS
+* ssh_server keeps listening to port 22 for future request from other clients
+
+Local forwarding steps :
+* ssh_client listens to its own ssh_client_port
+* ssh_server listens to ssh-tunnel
+* ssh_client forwards all traffic from ssh_client_port to ssh-tunnel
+* ssh_server forwards all traffic from ssh-tunnel to "service_addr : service_port" via ordinary TCP connection
+
+General use case (3 roles) :
+
+            ssh              tcp
+ssh_client <---> ssh_server <---> service_host
+
+Specific use case (2 roles) :
+
+            ssh
+ssh_client <---> ssh_server == service_host
+
+
+
+
+***********************************************
+*** ssh port remote-forwarding (in general) ***
+***********************************************
+What is remote-forwarding in ssh?
+* method 1     cmd > ssh -N -R [ssh_server_port] : [service_addr] : [service_port] [ssh_user]@[ssh_server_addr]
+* method 2     cmd > ssh <ssh_server_alias>                          plus following .ssh/config in ssh_client
+
+  Host <ssh_server_alias>
+    HostName       <ssh_server_addr>
+    User           <ssh_user>
+    RemoteForward  <ssh_server_port> <service_addr>:<service_port>
+
+ssh-tunnel setup steps (exactly same as that in local-forwarding) :
+* ssh_server listens to its own port 22
+* ssh_client connects to ssh_server port 22
+* ssh-tunnel's port on ssh_server side is assigned by ssh_server's OS
+* ssh-tunnel's port on ssh_client side is assigned by ssh_client's OS
+* ssh_server keeps listening to port 22 for future request from other clients
+
+Remote forwarding steps :
+* ssh_server listens to its own ssh_server_port
+* ssh_client listens to ssh-tunnel
+* ssh_server forwards all traffic from ssh_server_port to ssh-tunnel
+* ssh_client forwards all traffic from ssh-tunnel to "service_addr : service_port" via ordinary TCP connection
+
+General use case (3 roles) :
+
+            ssh              tcp
+ssh_server <---> ssh_client <---> service_host
+
+Specific use case (2 roles) :
+
+            ssh
+ssh_server <---> ssh_client == service_host
+
+
+
+
+**************
+*** Remark ***
+**************
+1. ssh -N means no remote command, just setup port-forwarding
+2. ssh-tunnel is TCP connection with extra security
+3. ssh_server is sometimes known as jump-host in both "ssh -L" and "ssh -R" case (but why?)
+4. for both local and remote forwarding, both ssh_client and ssh_server are involved in forwarding
+
+
