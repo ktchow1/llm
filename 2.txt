@@ -1,0 +1,68 @@
+************************
+*** Lazy calculation ***
+************************
+In boost::ublas, matrix calculation like this : 
+
+    A = B + C;
+    A = A + C;
+
+or in general : 
+
+    A = B OP C;
+    A = A OP C;
+
+boost::ublas adopts lazy calculation, it delays the real calculation until it needs to be materialized on an assignment. 
+RHS expression in boost::ublas returns an expression object (instead of a matrix). When it materalizes the calculation, 
+it allocates temporary matrix for storing calculation result, then copies the temporary into LHS matrix. The allocation
+and copying is a measure to avoid non-safe-alias. Lets define alias, non-safe-alias and safe-alias. 
+
+
+
+
+*****************************************
+*** Alias and allocation of temporary ***
+*****************************************
+When we have : 
+
+    LHS = RHS
+
+If LHS and RHS share the same matrix, this is alias. Alias means inplace calculation can be unsafe (but not necessary).
+If calculation of RHS(n1,m1) depends on LHS(n0,m0) where :
+
+   n1 * M + m1 > n0 * M + m0
+   n1 >= n0
+   M = number of columns in matrix (both LHS and RHS)
+
+when we do above calculation inplace, scan matrix in row-major manner, and update directly to LHS(n0,m0), then calculation 
+of RHS(n1,m1) will be incorrect, as LHS(n0,m0) is no longer original input value. This is non-safe-alias, this calculation
+should not be done inplace. However, if RHS is a elementwise operation, then this is a safe-alias, can be done inplace, 
+even when LHS and RHS share same matrix (i.e. alias happens).
+
+
+
+
+*************************
+*** Bypass allocation ***
+*************************
+However allocation is slow, it is redundant when there is no-alias or when it is a safe-alias. Only user knows whether the 
+calculation is safe-alias or not, therefore boost provides a way for user to declare no-alias or safe-alias, so as to bypass 
+allocation and perform inplace calculation, writes directly to L(n,m) for the sake of performance. The declaration is done 
+by function called noalias(), which means it is either no-alias or safe-alias.
+
+noalias(a) = b + c            (when there is no alias)
+noalias(a) = a + c            (when there is safe-alias, since this is elementwise operation)
+
+
+
+
+*****************
+*** PR review ***
+*****************
+Discussion (argument) in the comment of the PR is that, we can see there is alias in the following calculation. Is it ok 
+to declare noalias for LHS matrix in this case? Therefore the question is down to whether this is safe-alias or not.
+
+noalias(a) += (1 - std::exp(factor * (current_time-previous_time)) * (b - a));
+
+where a, b are matrix
+this formula is EMA, involving {+,-,scaling} of matrix
+this formula is elementwise, hence safe-alias
